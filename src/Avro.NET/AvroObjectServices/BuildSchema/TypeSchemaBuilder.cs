@@ -1,0 +1,506 @@
+﻿using AvroNET.AvroObjectServices.FileHeader;
+using AvroNET.AvroObjectServices.Schemas;
+using AvroNET.AvroObjectServices.Schemas.Abstract;
+using AvroNET.ComponentModel;
+using AvroNET.Infrastructure.Extensions;
+using Newtonsoft.Json.Linq;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Runtime.Serialization;
+using System.Text;
+using System.Threading.Tasks;
+using System.Xml.Linq;
+
+namespace AvroNET.AvroObjectServices.BuildSchema
+{
+    /// <summary>
+    ///     Class responsible for building the internal representation of the schema given a JSON string.
+    /// </summary>
+    internal sealed class TypeSchemaBuilder
+    {
+        private static readonly Dictionary<string, Func<PrimitiveTypeSchema>> PrimitiveRuntimeType
+            = new Dictionary<string, Func<PrimitiveTypeSchema>>(comparer: StringComparer.InvariantCultureIgnoreCase)
+        {
+            { "null", () => new NullSchema() },
+            { "boolean", () => new BooleanSchema() },
+            { "int", () => new IntSchema() },
+            { "long", () => new LongSchema() },
+            { "float", () => new FloatSchema() },
+            { "double", () => new DoubleSchema() },
+            { "bytes", () => new BytesSchema() },
+            { "string", () => new StringSchema() },
+        };
+
+
+        /// <summary>
+        ///     Parses the JSON schema.
+        /// </summary>
+        /// <param name="schema">The schema.</param>
+        /// <returns>Schema internal representation as a tree of nodes.</returns>
+        /// <exception cref="System.ArgumentException">Thrown when <paramref name="schema"/> is null or empty.</exception>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when <paramref name="schema"/> is invalid schema.</exception>
+        internal TypeSchema BuildSchema(string schema)
+        {
+            if (string.IsNullOrEmpty(schema))
+            {
+                throw new ArgumentNullException("schema");
+            }
+
+            JToken token = JToken.Parse(schema);
+            if (token == null)
+            {
+                throw new SerializationException(
+                    string.Format(CultureInfo.InvariantCulture, "'{0}' is invalid JSON.", schema));
+            }
+
+            return this.Parse(token, null, new Dictionary<string, NamedSchema>());
+        }
+
+        /// <summary>
+        /// Parses the specified token.
+        /// </summary>
+        /// <param name="token">The token.</param>
+        /// <param name="parent">The parent schema.</param>
+        /// <param name="namedSchemas">The schemas.</param>
+        /// <returns>
+        /// Schema internal representation.
+        /// </returns>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when JSON schema type is not supported.</exception>
+        private TypeSchema Parse(JToken token, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas)
+        {
+            if (token.Type == JTokenType.Object)
+            {
+                return this.ParseJsonObject(token as JObject, parent, namedSchemas);
+            }
+
+            if (token.Type == JTokenType.String)
+            {
+                var t = (string)token;
+                if (namedSchemas.ContainsKey(t))
+                {
+                    return namedSchemas[t];
+                }
+
+                if (parent != null && namedSchemas.ContainsKey(parent.Namespace + "." + t))
+                {
+                    return namedSchemas[parent.Namespace + "." + t];
+                }
+
+                // Primitive.
+                return this.ParsePrimitiveTypeFromString(t);
+            }
+
+            if (token.Type == JTokenType.Array)
+            {
+                return this.ParseUnionType(token as JArray, parent, namedSchemas);
+            }
+
+            throw new SerializationException(
+                string.Format(CultureInfo.InvariantCulture, "Unexpected Json schema type '{0}'.", token));
+        }
+
+        /// <summary>
+        /// Parses the JSON object.
+        /// </summary>
+        /// <param name="token">The object.</param>
+        /// <param name="parent">The parent schema.</param>
+        /// <param name="namedSchemas">The schemas.</param>
+        /// <returns>
+        /// Schema internal representation.
+        /// </returns>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when JSON schema type is invalid.</exception>
+        private TypeSchema ParseJsonObject(JObject token, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas)
+        {
+            JToken tokenType = token[AvroKeywords.Type];
+            if (tokenType.Type == JTokenType.String)
+            {
+                var typeString = token.RequiredProperty<string>(AvroKeywords.Type);
+                Enum.TryParse(typeString, true, out AvroType type);
+
+                var logicalType = token.OptionalProperty<string>(AvroKeywords.LogicalType);
+                if (logicalType != null)
+                {
+                    return this.ParseLogicalType(token, parent, namedSchemas, logicalType);
+                }
+
+                switch (type)
+                {
+                    case AvroType.Record:
+                        return this.ParseRecordType(token, parent, namedSchemas);
+                    case AvroType.Enum:
+                        return this.ParseEnumType(token, parent, namedSchemas);
+                    case AvroType.Array:
+                        return this.ParseArrayType(token, parent, namedSchemas);
+                    case AvroType.Map:
+                        return this.ParseMapType(token, parent, namedSchemas);
+                    case AvroType.Fixed:
+                        return this.ParseFixedType(token, parent);
+                    default:
+                        {
+                            if (PrimitiveRuntimeType.ContainsKey(type.ToString()))
+                            {
+                                return this.ParsePrimitiveTypeFromObject(token);
+                            }
+
+                            throw new SerializationException(
+                            string.Format(CultureInfo.InvariantCulture, "Invalid type specified: '{0}'.", type));
+                        }
+                }
+            }
+
+            if (tokenType.Type == JTokenType.Array)
+            {
+                return this.ParseUnionType(tokenType as JArray, parent, namedSchemas);
+            }
+
+            throw new SerializationException(
+                string.Format(CultureInfo.InvariantCulture, "Invalid type specified: '{0}'.", tokenType));
+        }
+
+        /// <summary>
+        /// Parses a union token.
+        /// </summary>
+        /// <param name="unionToken">The union token.</param>
+        /// <param name="parent">The parent.</param>
+        /// <param name="namedSchemas">The named schemas.</param>
+        /// <returns>
+        /// Schema internal representation.
+        /// </returns>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when union schema type is invalid.</exception>
+        private TypeSchema ParseUnionType(JArray unionToken, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas)
+        {
+            var types = new HashSet<string>();
+            var schemas = new List<TypeSchema>();
+            foreach (var typeAlternative in unionToken.Children())
+            {
+                var schema = this.Parse(typeAlternative, parent, namedSchemas);
+                if (schema.Type == AvroType.Union)
+                {
+                    throw new SerializationException(
+                        string.Format(CultureInfo.InvariantCulture, "Union schemas cannot be nested:'{0}'.", unionToken));
+                }
+
+                if (types.Contains(schema.Name))
+                {
+                    throw new SerializationException(
+                        string.Format(CultureInfo.InvariantCulture, "Unions cannot contains schemas of the same type: '{0}'.", schema.Name));
+                }
+
+                types.Add(schema.Name);
+                schemas.Add(schema);
+            }
+
+            return new UnionSchema(schemas, typeof(object));
+        }
+
+        /// <summary>
+        /// Parses a JSON object representing an Avro enumeration to a <see cref="EnumSchema"/>.
+        /// </summary>
+        /// <param name="enumeration">The JSON token that represents the enumeration.</param>
+        /// <param name="parent">The parent schema.</param>
+        /// <param name="namedSchemas">The named schemas.</param>
+        /// <returns>
+        /// Instance of <see cref="TypeSchema" /> containing IR of the enumeration.
+        /// </returns>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when <paramref name="enumeration"/> contains invalid symbols.</exception>
+        private TypeSchema ParseEnumType(JObject enumeration, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas)
+        {
+            var name = enumeration.RequiredProperty<string>(AvroKeywords.Name);
+            var nspace = this.GetNamespace(enumeration, parent, name);
+            var enumName = new SchemaName(name, nspace);
+
+            var doc = enumeration.OptionalProperty<string>(AvroKeywords.Doc);
+            var aliases = this.GetAliases(enumeration, enumName.Namespace);
+            var attributes = new NamedEntityAttributes(enumName, aliases, doc);
+
+            List<string> symbols = enumeration.OptionalArrayProperty(
+                AvroKeywords.Symbols,
+                (symbol, index) =>
+                {
+                    if (symbol.Type != JTokenType.String)
+                    {
+                        throw new SerializationException(
+                            string.Format(CultureInfo.InvariantCulture, "Expected an enum symbol of type string however the type of the symbol is '{0}'.", symbol.Type));
+                    }
+                    return (string)symbol;
+                });
+
+            Dictionary<string, string> customAttributes = enumeration.GetAttributesNotIn(StandardProperties.Enumeration);
+
+            //fixme: runtime type cannot be provided for json schema resolution. Providing general type
+            var result = new EnumSchema(attributes, typeof(Enum), customAttributes);
+            namedSchemas.Add(result.FullName, result);
+            symbols.ForEach(result.AddSymbol);
+            return result;
+        }
+
+        /// <summary>
+        /// Parses a JSON object representing an Avro array.
+        /// </summary>
+        /// <param name="array">JSON representing the array.</param>
+        /// <param name="parent">The parent.</param>
+        /// <param name="namedSchemas">The named schemas.</param>
+        /// <returns>
+        /// A corresponding schema.
+        /// </returns>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when no 'items' property is found in <paramref name="array" />.</exception>
+        private TypeSchema ParseArrayType(JObject array, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas)
+        {
+            var itemType = array[AvroKeywords.Items];
+            if (itemType == null)
+            {
+                throw new SerializationException(
+                    string.Format(CultureInfo.InvariantCulture, "Property 'items' cannot be found inside the array '{0}'.", array));
+            }
+
+            var elementSchema = this.Parse(itemType, parent, namedSchemas);
+            return new ArraySchema(elementSchema, typeof(Array));
+        }
+
+        /// <summary>
+        /// Parses a JSON object representing an Avro map.
+        /// </summary>
+        /// <param name="map">JSON representing the map.</param>
+        /// <param name="parent">The parent.</param>
+        /// <param name="namedSchemas">The named schemas.</param>
+        /// <returns>
+        /// A corresponding schema.
+        /// </returns>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when 'values' property is not found in <paramref name="map" />.</exception>
+        private TypeSchema ParseMapType(JObject map, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas)
+        {
+            var valueType = map[AvroKeywords.Values];
+            if (valueType == null)
+            {
+                throw new SerializationException(
+                    string.Format(CultureInfo.InvariantCulture, "Property 'values' cannot be found inside the map '{0}'.", map));
+            }
+
+            var valueSchema = this.Parse(valueType, parent, namedSchemas);
+            return new MapSchema(new StringSchema(), valueSchema, typeof(Dictionary<string, object>));
+        }
+
+        private TypeSchema ParseLogicalType(JObject token, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas, string logicalType)
+        {
+            TypeSchema result;
+            switch (logicalType)
+            {
+                case LogicalTypeSchema.LogicalTypeEnum.Uuid:
+                    result = new UuidSchema();
+                    break;
+                case LogicalTypeSchema.LogicalTypeEnum.Decimal:
+                    var scale = token.OptionalProperty<int>(nameof(DecimalSchema.Scale).ToLower());
+                    var precision = token.RequiredProperty<int>(nameof(DecimalSchema.Precision).ToLower());
+                    result = new DecimalSchema(typeof(decimal), precision, scale);
+                    break;
+                case LogicalTypeSchema.LogicalTypeEnum.Duration:
+                    result = new DurationSchema();
+                    break;
+                case LogicalTypeSchema.LogicalTypeEnum.TimestampMilliseconds:
+                    result = new TimestampMillisecondsSchema();
+                    break;
+                case LogicalTypeSchema.LogicalTypeEnum.TimestampMicroseconds:
+                    result = new TimestampMicrosecondsSchema();
+                    break;
+                case LogicalTypeSchema.LogicalTypeEnum.TimeMilliseconds:
+                    result = new TimeMillisecondsSchema();
+                    break;
+                case LogicalTypeSchema.LogicalTypeEnum.TimeMicrosecond:
+                    result = new TimeMicrosecondsSchema();
+                    break;
+                case LogicalTypeSchema.LogicalTypeEnum.Date:
+                    result = new DateSchema();
+                    break;
+                default:
+                    throw new SerializationException(
+                        string.Format(CultureInfo.InvariantCulture, "Unknown LogicalType schema :'{0}'.", logicalType));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Parses the record type.
+        /// </summary>
+        /// <param name="record">The record.</param>
+        /// <param name="parent">The parent schema.</param>
+        /// <param name="namedSchemas">The named schemas.</param>
+        /// <returns>
+        /// Schema internal representation.
+        /// </returns>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when <paramref name="record"/> can not be parsed properly.</exception>
+        private TypeSchema ParseRecordType(JObject record, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas)
+        {
+            var name = record.RequiredProperty<string>(AvroKeywords.Name);
+            var nspace = this.GetNamespace(record, parent, name);
+            var recordName = new SchemaName(name, nspace);
+
+            var doc = record.OptionalProperty<string>(AvroKeywords.Doc);
+            var aliases = this.GetAliases(record, recordName.Namespace);
+            var attributes = new NamedEntityAttributes(recordName, aliases, doc);
+
+            Dictionary<string, string> customAttributes = record.GetAttributesNotIn(StandardProperties.Record);
+            var result = new RecordSchema(attributes, typeof(object), customAttributes);
+            if (namedSchemas.ContainsKey(result.FullName))
+            {
+                return namedSchemas[result.FullName];
+            }
+            namedSchemas.Add(result.FullName, result);
+
+            List<RecordFieldSchema> fields = record.OptionalArrayProperty(
+                AvroKeywords.Fields,
+                (field, index) =>
+                {
+                    if (field.Type != JTokenType.Object)
+                    {
+                        throw new SerializationException(
+                            string.Format(CultureInfo.InvariantCulture, "Property 'fields' has invalid value '{0}'.", field));
+                    }
+                    return this.ParseRecordField(field as JObject, result, namedSchemas, index);
+                });
+
+            fields.ForEach(result.AddField);
+            return result;
+        }
+
+        /// <summary>
+        /// Parses the record field.
+        /// </summary>
+        /// <param name="field">The field.</param>
+        /// <param name="parent">The parent schema.</param>
+        /// <param name="namedSchemas">The named schemas.</param>
+        /// <param name="position">The position.</param>
+        /// <returns>
+        /// Schema internal representation.
+        /// </returns>
+        /// <exception cref="System.Runtime.Serialization.SerializationException">Thrown when <paramref name="field"/> is not valid or when sort order is not valid.</exception>
+        private RecordFieldSchema ParseRecordField(JObject field, NamedSchema parent, Dictionary<string, NamedSchema> namedSchemas, int position)
+        {
+            var name = field.RequiredProperty<string>(AvroKeywords.Name);
+            var doc = field.OptionalProperty<string>(AvroKeywords.Doc);
+            var order = field.OptionalProperty<string>(AvroKeywords.Order);
+            var aliases = this.GetAliases(field, parent.FullName);
+            var fieldType = field[AvroKeywords.Type];
+            if (fieldType == null)
+            {
+                throw new SerializationException(
+                    string.Format(CultureInfo.InvariantCulture, "Record field schema '{0}' has no type.", field));
+            }
+
+            TypeSchema type = this.Parse(fieldType, parent, namedSchemas);
+            object defaultValue = null;
+            bool hasDefaultValue = field[AvroKeywords.Default] != null;
+            if (hasDefaultValue)
+            {
+                var objectParser = new DefaultValueResolver();
+                defaultValue = objectParser.Parse(type, field[AvroKeywords.Default].ToString());
+            }
+
+            var fieldName = new SchemaName(name);
+            var attributes = new NamedEntityAttributes(fieldName, aliases, doc);
+
+            return new RecordFieldSchema(attributes, type, hasDefaultValue, defaultValue, position);
+        }
+
+        /// <summary>
+        ///     Parses the primitive type schema.
+        /// </summary>
+        /// <param name="token">The token.</param>
+        /// <returns>Schema internal representation.</returns>
+        private TypeSchema ParsePrimitiveTypeFromString(string token)
+        {
+            return this.CreatePrimitiveTypeSchema(token, new Dictionary<string, string>());
+        }
+
+        /// <summary>
+        ///     Parses the primitive type schema.
+        /// </summary>
+        /// <param name="token">The token.</param>
+        /// <param name="usingTypeName">Will use this type name for creating the primitive type.</param>
+        /// <returns>Schema internal representation.</returns>
+        private TypeSchema ParsePrimitiveTypeFromObject(JObject token, string usingTypeName = null)
+        {
+            if (usingTypeName == null)
+            {
+                usingTypeName = token.RequiredProperty<string>(AvroKeywords.Type);
+            }
+
+            var customAttributes = token.GetAttributesNotIn(StandardProperties.Primitive);
+            return this.CreatePrimitiveTypeSchema(usingTypeName, customAttributes);
+        }
+
+        /// <summary>
+        ///     Creates the primitive type schema.
+        /// </summary>
+        /// <param name="type">The type.</param>
+        /// <param name="attributes">The attributes.</param>
+        /// <returns>Schema internal representation.</returns>
+        private TypeSchema CreatePrimitiveTypeSchema(string type, Dictionary<string, string> attributes)
+        {
+            var result = PrimitiveRuntimeType[type]();
+            foreach (var attribute in attributes)
+            {
+                result.AddAttribute(attribute.Key, attribute.Value);
+            }
+            return result;
+        }
+
+        private FixedSchema ParseFixedType(JObject type, NamedSchema parent)
+        {
+            var name = type.RequiredProperty<string>(AvroKeywords.Name);
+            var nspace = this.GetNamespace(type, parent, name);
+            var fixedName = new SchemaName(name, nspace);
+
+            var size = type.RequiredProperty<int>(AvroKeywords.Size);
+            if (size <= 0)
+            {
+                throw new SerializationException(
+                    string.Format(CultureInfo.InvariantCulture, "Only positive size of fixed values allowed: '{0}'.", size));
+            }
+
+            var aliases = this.GetAliases(type, fixedName.Namespace);
+            var attributes = new NamedEntityAttributes(fixedName, aliases, string.Empty);
+
+            var customAttributes = type.GetAttributesNotIn(StandardProperties.Record);
+            var result = new FixedSchema(attributes, size, typeof(byte[]), customAttributes);
+            return result;
+        }
+
+        private string GetNamespace(JObject type, NamedSchema parentSchema, string name)
+        {
+            var nspace = type.OptionalProperty<string>(AvroKeywords.Namespace);
+            if (string.IsNullOrEmpty(nspace) && !name.Contains(".") && parentSchema != null)
+            {
+                nspace = parentSchema.Namespace;
+            }
+            return nspace;
+        }
+
+        private List<string> GetAliases(JObject type, string @namespace)
+        {
+            List<string> aliases = type.OptionalArrayProperty(
+                AvroKeywords.Aliases,
+                (alias, index) =>
+                {
+                    if (alias.Type != JTokenType.String)
+                    {
+                        throw new SerializationException(
+                            string.Format(CultureInfo.InvariantCulture, "Property 'aliases' has invalid value '{0}'.", alias));
+                    }
+
+                    var result = (string)alias;
+                    if (string.IsNullOrEmpty(result))
+                    {
+                        throw new SerializationException(
+                            string.Format(CultureInfo.InvariantCulture, "Alias is not allowed to be null or empty."));
+                    }
+
+                    return result;
+                });
+
+            return aliases;
+        }
+    }
+}
