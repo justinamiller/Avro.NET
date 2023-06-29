@@ -30,6 +30,11 @@ Results of BenchmarkDotNet:
 | Json_Gzip    |       194.7       |          85.45        |          514         |
 | Avro_Gzip    |       131.5       |          74.15        |          104         |
 
+## Docs
+**Avro format combines readability of JSON and data compression of binary serialization.**
+[Apache Wiki](https://cwiki.apache.org/confluence/display/AVRO/Index)
+[Apache Avro format documentation](http://avro.apache.org/)
+
 ## Code samples
 
 * Serialization
