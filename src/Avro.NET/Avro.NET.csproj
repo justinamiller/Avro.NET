@@ -4,6 +4,13 @@
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <Title>Avro.NET </Title>
+    <Description>Fast Avro deserializer/serializer for C# .NET, with supported JSON helper</Description>
+    <PackageTags>avro;json;serialization;deserialization;schema;</PackageTags>
+    <Copyright>https://creativecommons.org/licenses/by-nc-sa/3.0/</Copyright>
+    <PackageProjectUrl>https://github.com/justinamiller/Avro.NET</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/justinamiller/Avro.NET</RepositoryUrl>
   </PropertyGroup>
 
   <ItemGroup>

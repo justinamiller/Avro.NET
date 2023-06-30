@@ -11,7 +11,7 @@ namespace AvroNET
         /// <summary>
         /// no compression
         /// </summary>
-        Null = 0,
+        None = 0,
         /// <summary>
         /// deflat compression
         /// </summary>

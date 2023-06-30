@@ -86,7 +86,7 @@ namespace AvroNETUnitTest
             byte[] result;
             using (MemoryStream resultStream = new MemoryStream())
             {
-                using (var writer = new AvroNET.Features.Serialize.Encoder(schema, resultStream, CodecType.Null))
+                using (var writer = new AvroNET.Features.Serialize.Encoder(schema, resultStream, CodecType.None))
                 {
                     writer.Append(data);
                 }

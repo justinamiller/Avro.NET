@@ -299,7 +299,7 @@ namespace AvroNET
         public static byte[] Json2Avro(string json)
         {
             var decoder = new JsonToAvroDecoder();
-            return decoder.DecodeJson(json, CodecType.Null);
+            return decoder.DecodeJson(json, CodecType.None);
 
         }
 
@@ -343,7 +343,7 @@ namespace AvroNET
             {
                 using (var encoder = new MergeEncoder(resultStream))
                 {
-                    encoder.WriteHeader(targetSchema.ToString(), CodecType.Null);
+                    encoder.WriteHeader(targetSchema.ToString(), CodecType.None);
 
                     encoder.WriteData(avroDataBlocks);
                 }
@@ -361,7 +361,7 @@ namespace AvroNET
         /// </summary>
         public static byte[] Serialize(object obj)
         {
-            return Serialize(obj, CodecType.Null);
+            return Serialize(obj, CodecType.None);
         }
 
         /// <summary>
