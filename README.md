@@ -27,10 +27,10 @@ Results of BenchmarkDotNet:
 
 |Converter     | Request Time [ms] | Allocated Memory [MB] | Compressed Size [kB] |
 |------------- |------------------:|----------------------:|---------------------:|
-| Json         |       642.1       |          51.45        |         6044         |
+| Json         |       642.1       |          151.45        |         6044         |
 | Avro         |       254.3       |          71.27        |         2623         |
 | Json_Gzip    |       194.7       |          85.45        |          514         |
-| Avro_Gzip    |       131.5       |          74.15        |          104         |
+| Avro_Gzip    |       131.5       |          64.15        |          104         |
 
 ## Docs
 **Avro format combines readability of JSON and data compression of binary serialization.**
