@@ -1,6 +1,8 @@
 # Avro.NET
 Rapid Avro serializer for C# .NET
 
+[![NuGet Badge](https://buildstats.info/nuget/Avro.NET)](https://www.nuget.org/packages/Avro.NET/)
+
 ## Benefits
 Introducing Avro to the projects brings three main benefits:
  * Reduction of data size and storage cost
