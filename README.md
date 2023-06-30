@@ -1,5 +1,5 @@
 # Avro.NET
-Rapid Avro serializer for C# .NET
+Fast Avro de/serializer for .NET
 
 [![NuGet Badge](https://buildstats.info/nuget/Avro.NET)](https://www.nuget.org/packages/Avro.NET/)
 
